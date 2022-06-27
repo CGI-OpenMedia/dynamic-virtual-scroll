@@ -37,6 +37,7 @@
   "files": [
     "DynamicVirtualScroll.es5.js",
     "DynamicVirtualScroll.js",
+    "DynamicVirtualScroll.ts",
     "VirtualScrollList.es5.js",
     "VirtualScrollList.js",
     "DynamicVirtualScrollExample.js",
