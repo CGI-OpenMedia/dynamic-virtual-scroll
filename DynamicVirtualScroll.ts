@@ -4,7 +4,47 @@
  * License: GNU LGPLv3.0+
  * (c) Vitaliy Filippov 2018+
  *
- * @param props { totalItems, minRowHeight, viewportHeight, scrollTop }
+ */
+
+ export type DriverProps = {
+    readonly totalItems: number;
+    readonly minRowHeight: number;
+    readonly viewportHeight: number;
+    readonly scrollTop: number;
+}
+
+interface DriverStateWrite {
+    [key: string]: number;          //internal props used by the module
+    targetHeight: number;           //estimated total height for all items, used to size a container elem of items inside of scroll container
+    topPlaceholderHeight: number;
+    firstMiddleItem: number;
+    middleItemCount: number;
+    middlePlaceholderHeight: number;
+    lastItemCount: number;
+
+    avgRowHeight: number;       //used by keep steady feature
+}
+
+/** Consumer is not supposed to mutate state */
+export type DriverState = Readonly<DriverStateWrite>
+
+export const initDriverState: DriverState = {
+    targetHeight: 0,
+    topPlaceholderHeight: 0,
+    firstMiddleItem: 0,
+    middleItemCount: 0,
+    middlePlaceholderHeight: 0,
+    lastItemCount: 0,
+
+    avgRowHeight: 0
+}
+
+/**
+ * @returns 0 when index invalid (NaN) or item not rendered yet
+ */
+type GetRenderedItemHeightCallback = (itemIndex: number /*can be NaN*/) => number
+
+/** @param props { totalItems, minRowHeight, viewportHeight, scrollTop }
  * @param oldState - previous state object
  * @param getRenderedItemHeight = (itemIndex) => height
  *     this function MUST return the height of currently rendered item or 0 if it's not currently rendered
@@ -21,11 +61,13 @@
  *         newState.middlePlaceholderHeight - height of the second (middle) placeholder. omit placeholder if it is 0
  *         newState.lastItemCount - item count to be rendered in the end of the list
  */
-export function virtualScrollDriver(props, oldState, getRenderedItemHeight)
-{
+export function virtualScrollDriver(
+    props: DriverProps,
+    oldState: DriverState,
+    getRenderedItemHeight: GetRenderedItemHeightCallback): DriverState {
     const viewportHeight = props.viewportHeight;
-    const viewportItemCount = Math.ceil(viewportHeight/props.minRowHeight); // +border?
-    const newState = {
+    const viewportItemCount = Math.ceil(viewportHeight / props.minRowHeight); // +border?
+    const newState: DriverStateWrite = {
         viewportHeight,
         viewportItemCount,
         totalItems: props.totalItems,
@@ -39,14 +81,17 @@ export function virtualScrollDriver(props, oldState, getRenderedItemHeight)
         lastItemCount: props.totalItems,
         lastItemsTotalHeight: oldState.lastItemsTotalHeight,
     };
-    if (!oldState.viewportHeight)
-    {
-        oldState = { ...oldState };
-        for (let k in newState)
-        {
-            oldState[k] = oldState[k] || 0;
-        }
-    }
+
+    //if (!oldState.viewportHeight)
+    //{
+    //    oldState = { ...oldState };
+    //    for (let k in newState)
+    //    {
+    //        oldState[k] = oldState[k] || 0;
+    //    }
+    //}
+    const oldStateAvgRowHeight = oldState.viewportHeight ? oldState.avgRowHeight : (oldState.avgRowHeight || 0)
+
     if (2*newState.viewportItemCount >= props.totalItems)
     {
         // We need at least 2*viewportItemCount to perform virtual scrolling
@@ -59,15 +104,27 @@ export function virtualScrollDriver(props, oldState, getRenderedItemHeight)
         while (lastItemsHeight < viewportHeight)
         {
             lastItemSize = getRenderedItemHeight(props.totalItems - 1 - lastVisibleItems);
-            if (!lastItemSize)
-            {
+            //if (!lastItemSize)
+            //{
+            //    // Some required items in the end are missing
+            //    lastItemSize = 0;
+            //}
+            //lastItemsHeight += lastItemSize < props.minRowHeight ? props.minRowHeight : lastItemSize;
+            //lastItemSize is used below to calc 'scrollHeightInItems'
+            //assign default value used here if item missing to avoid divide by zero
+            if (!lastItemSize || lastItemSize < props.minRowHeight) {
                 // Some required items in the end are missing
-                lastItemSize = 0;
+                lastItemSize = props.minRowHeight;
             }
-            lastItemsHeight += lastItemSize < props.minRowHeight ? props.minRowHeight : lastItemSize;
+            lastItemsHeight += lastItemSize;
             lastVisibleItems++;
         }
-        newState.scrollHeightInItems = props.totalItems - lastVisibleItems + (lastItemsHeight-viewportHeight) / lastItemSize;
+        newState.scrollHeightInItems = props.totalItems - lastVisibleItems + (lastItemsHeight - viewportHeight) / lastItemSize;
+        //this change produced update error (too many nested loops)
+        //take into account not only the last one but the average height
+        //newState.scrollHeightInItems = props.totalItems - lastVisibleItems +
+        //    (lastItemsHeight - viewportHeight) / (lastItemsHeight / lastVisibleItems);
+
         // Calculate heights of the rest of items
         while (lastVisibleItems < newState.viewportItemCount)
         {
@@ -76,9 +133,9 @@ export function virtualScrollDriver(props, oldState, getRenderedItemHeight)
         }
         newState.lastItemsTotalHeight = lastItemsHeight;
         newState.avgRowHeight = lastItemsHeight / lastVisibleItems;
-        newState.avgRowHeight = !oldState.avgRowHeight || newState.avgRowHeight > oldState.avgRowHeight
+        newState.avgRowHeight = !oldStateAvgRowHeight || newState.avgRowHeight > oldStateAvgRowHeight
             ? newState.avgRowHeight
-            : oldState.avgRowHeight;
+            : oldStateAvgRowHeight;
     }
     newState.targetHeight = newState.avgRowHeight * newState.scrollHeightInItems + newState.viewportHeight;
     const scrollTop = props.scrollTop;
@@ -93,7 +150,7 @@ export function virtualScrollDriver(props, oldState, getRenderedItemHeight)
     const firstVisibleItemOffset = firstVisibleItem - Math.floor(firstVisibleItem);
     // FIXME: Render some items before current for smoothness
     firstVisibleItem = Math.floor(firstVisibleItem);
-    let firstVisibleItemHeight = getRenderedItemHeight(firstVisibleItem) || newState.avgRowHeight;
+    const firstVisibleItemHeight = getRenderedItemHeight(firstVisibleItem) || newState.avgRowHeight;
     newState.topPlaceholderHeight = scrollTop - firstVisibleItemHeight*firstVisibleItemOffset;
     if (newState.topPlaceholderHeight < 0)
     {
@@ -101,6 +158,9 @@ export function virtualScrollDriver(props, oldState, getRenderedItemHeight)
     }
     if (firstVisibleItem + newState.viewportItemCount >= props.totalItems - newState.viewportItemCount)
     {
+        //set prop otherwise is always 0 (uninitialized) and 
+        //the loop below with getRenderedItemHeight() would always start with index=0
+        newState.firstMiddleItem = firstVisibleItem;
         // Only one placeholder is required
         newState.lastItemCount = props.totalItems - firstVisibleItem;
         let sum = 0, count = props.totalItems - newState.viewportItemCount - firstVisibleItem;
